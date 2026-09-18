@@ -34,12 +34,16 @@ README.md
 
 ## Instalación y ejecución local
 
+Para desarrollo y pruebas (incluye `pytest` y `httpx2`):
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate         # Windows
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+`requirements.txt` contiene el conjunto runtime (incluye `torch` y `torchvision`, instalados por Docker desde el índice CPU de PyTorch); `requirements-dev.txt` agrega solo las dependencias de desarrollo/pruebas.
 
 La primera ejecución descarga los pesos oficiales de ImageNet (~45 MB) desde download.pytorch.org y los guarda en la caché local (`~/.cache/torch`).
 

@@ -1,9 +1,4 @@
-fastapi==0.141.1
-uvicorn[standard]==0.53.0
-python-multipart==0.0.32
-pillow==12.3.0
+-r requirements-runtime.txt
+
 torch==2.14.0
 torchvision==0.29.0
-numpy==2.5.3
-pytest==9.1.1
-httpx2==2.13.0
