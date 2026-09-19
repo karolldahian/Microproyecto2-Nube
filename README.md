@@ -32,9 +32,9 @@ El clúster ya se encuentra creado en la región **Chile Central** (Kubernetes v
 
 ```
 ├── infra/         Documentación de la infraestructura en Azure
-├── classifier/    Aplicación "classifier" (por implementar)
-├── app2/          Aplicación "app2" (por implementar)
-├── k8s/           Manifiestos de Kubernetes (por crear)
+├── classifier/    Aplicación "classifier" (implementada y desplegada en AKS)
+├── app2/          Aplicación "app2" (implementada y desplegada en AKS)
+├── k8s/           Manifiestos de Kubernetes (implementados)
 ├── docs/          Documentación del proyecto (por crear)
 ├── README.md
 └── .gitignore
