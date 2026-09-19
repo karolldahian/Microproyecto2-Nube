@@ -16,8 +16,9 @@ requisito académico** del Microproyecto 2 de Computación en la Nube.
 
 | Archivo           | Recurso    | Qué crea                                                        |
 | ----------------- | ---------- | --------------------------------------------------------------- |
-| `deployment.yaml` | Deployment | Define el Pod del clasificador, su imagen, puerto y sondas.     |
+| `deployment.yaml` | Deployment | Define el Pod del clasificador, su imagen, puerto, sondas y límites de recursos. |
 | `service.yaml`    | Service    | Expone el Pod con una IP pública para acceder desde fuera de AKS. |
+| `hpa.yaml`        | HPA        | Escala automáticamente el Deployment según la utilización de CPU. |
 
 Para aplicar todo el directorio:
 
@@ -55,9 +56,31 @@ kubectl apply -f k8s/classifier/
   copia ya presente en el nodo y solo se descarga si no existe. `Always` se reserva
   para tags mutables como `latest`.
 - `containerPort: 8000`, el mismo puerto donde escucha Uvicorn.
-- **Sin** `resources` (requests/limits): se definirán después de medir el consumo real
-  del contenedor.
+- **`resources`** (requests/limits) definidos a partir del consumo real medido en AKS:
+
+  ```yaml
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+  ```
 - **Sin** privilegios, secretos ni `imagePullSecret`.
+
+### Requests vs limits
+
+- **request** (CPU `100m`, memoria `384Mi`): la cantidad mínima que el contenedor
+  necesita; es lo que el *scheduler* reserva en el nodo. Además, es la referencia que
+  usa el HPA para calcular la utilización de CPU. Valores cercanos al consumo en
+  reposo observado (≈334 Mi de RAM) para no sobre-reservar capacidad del nodo.
+- **limit** (CPU `500m`, memoria `768Mi`): el máximo que el contenedor puede llegar a
+  consumir. Para CPU, si el contenedor supera el límite, **su uso de CPU es limitado
+  (*throttled*)**, no se detiene: se reduce el tiempo de CPU que el kernel le permite,
+  lo que puede ralentizar la respuesta. Para memoria, el límite sí es duro: si el
+  contenedor supera el `memory limit`, el kernel puede matarlo con un **OOMKill**
+  (terminación por falta de memoria), y Kubernetes reinicia el contenedor.
 
 ### Sondas
 
@@ -100,6 +123,51 @@ Alternativas descartadas:
 - `NodePort`: requeriría usar la IP pública de un nodo y reglas del NSG, con un puerto
   alto; menos claro y más frágil que una IP pública estable del Service.
 
+## HorizontalPodAutoscaler (HPA)
+
+`hpa.yaml`:
+
+- `apiVersion: autoscaling/v2`, `kind: HorizontalPodAutoscaler`, nombre `classifier`.
+- `scaleTargetRef`: apunta al **Deployment `classifier`** (`apps/v1`). El HPA actúa
+  sobre el Deployment y ajusta el número de réplicas; cuando el HPA está activo, es él
+  quien controla `spec.replicas` (el `replicas: 1` del Deployment queda como valor
+  inicial gestionado por el HPA).
+- `minReplicas: 1`: **nunca** reduce el Deployment por debajo de 1 Pod.
+- `maxReplicas: 3`: **nunca** escala por encima de 3 Pods.
+- Métrica: CPU con `target.type: Utilization` y `averageUtilization: 60`.
+
+### Cómo decide escalar
+
+El HPA mide la **utilización de CPU promedio de los Pods respecto al CPU request** de
+cada Pod (100m). Con `averageUtilization: 60`, el objetivo es que cada Pod use en
+promedio el **60 % de su request** (≈60m de CPU). Si la carga hace que esa utilización
+supere el objetivo, el HPA aumenta las réplicas (hasta `maxReplicas`); cuando la carga
+desciende y la utilización vuelve a estar por debajo del objetivo, el HPA reduce las
+réplicas tras un período de estabilización, pero **nunca por debajo de `minReplicas`**.
+
+Por eso el HPA depende del `request` de CPU definido en el Deployment: si no existiera
+el request, no habría base sobre la cual calcular el porcentaje de utilización.
+
+## Validación experimental del HPA en AKS
+
+El HPA fue desplegado junto con el Deployment y sometido a una **prueba de carga
+sostenida de 60 segundos** (`/predict` con imágenes):
+
+- En reposo, el Pod consumía ≈**2m de CPU** y ≈**334 Mi de RAM**.
+- Durante la carga se observó un pico de ≈**67m de CPU** (≈67 % del request de 100m),
+  por encima del objetivo del 60 %.
+- El HPA registró el evento **`SuccessfulRescale`** por utilización de CPU por encima
+  del objetivo.
+- Escaló automáticamente de **1 → 2 Pods**, y los dos Pods quedaron temporalmente
+  distribuidos entre los dos nodos del AKS.
+- Al terminar la carga, la CPU volvió a ≈2 %; apareció **`ScaleDownStabilized`** (período
+  de estabilización para no oscilar) y el HPA redujo automáticamente de **2 → 1 Pod**.
+
+En esa prueba se completaron **2183 inferencias en los 60 segundos**. Este número es el
+**resultado observado de esta prueba concreta** (para el clúster, la carga y la imagen
+usados): **no** debe presentarse como un benchmark máximo ni como una afirmación de la
+capacidad del clasificador.
+
 ## Validación propuesta (no ejecutar desde aquí)
 
 Los siguientes comandos son una guía para validar el despliegue. **No deben
@@ -112,11 +180,21 @@ kubectl apply -f k8s/classifier/
 # Estado del Deployment y del rollout
 kubectl rollout status deployment/classifier
 
+# Deployment (deseado y listo; el número de réplicas lo corrige el HPA)
+kubectl get deployment classifier
+
 # Pods (nombre, estado y nodo)
 kubectl get pods -l app=classifier -o wide
 
-# Detalle del Pod (eventos, sondas, imagen)
+# Detalle del Pod (eventos, sondas, imagen, recursos)
 kubectl describe pod -l app=classifier
+
+# HPA: objetivo, réplicas actuales y utilización de CPU
+kubectl get hpa classifier
+
+# Consumo real de CPU y memoria por Pod / por nodo
+kubectl top pods -l app=classifier
+kubectl top nodes
 
 # Logs del contenedor
 kubectl logs -l app=classifier
@@ -140,5 +218,6 @@ kubectl delete -f k8s/classifier/
 - No se incluyen credenciales, tokens, kubeconfig ni secretos.
 - El digest de la imagen está documentado para trazabilidad; el manifiesto usa el tag
   `v1` indicado.
-- Los `requests`/`limits` de CPU y memoria se agregarán en una fase posterior, tras
-  medir el consumo real del contenedor.
+- Los `requests`/`limits` y el HPA quedan definidos a partir del consumo real medido
+  en AKS (requests ≈ consumo en reposo; limit de CPU con margen para picos; HPA con
+  objetivo del 60 % sobre el CPU request).
