@@ -64,4 +64,4 @@ curl -X POST -F "file=@imagen.jpg" http://localhost:8000/predict
 
 - Los pesos del modelo se descargan una sola vez y el modelo se carga en memoria una única vez, reutilizándose en todas las predicciones.
 - El preprocesamiento usado es el oficial de torchvision para estos pesos (`ResNet18_Weights.IMAGENET1K_V1.transforms()`).
-- Este servicio no incluye todavía Dockerfile ni manifiestos de Kubernetes; se agregarán en una fase posterior.
+- El servicio incluye un `Dockerfile` para construir la imagen del contenedor y los manifiestos de Kubernetes en [`k8s/classifier/`](../k8s/classifier/README.md) para desplegarlo en AKS.
